@@ -30,7 +30,7 @@ setuptools.setup(
     install_requires=[
         'matplotlib',
         'numpy',
-        'pandas',
+        'pandas==0.24.2',
         'pybedtools',
         'seaborn',
         'sklearn',
