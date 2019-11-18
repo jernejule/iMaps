@@ -79,7 +79,7 @@ import scipy
 
 REGION_TYPES = [
     'genome',
-    'protein_coding',
+    'whole_gene',
     'intergenic',
     'intron',
     'UTR3',
@@ -88,7 +88,7 @@ REGION_TYPES = [
 ]
 REGION_SITES = {
     'genome': ['intron', 'CDS', 'UTR3', 'UTR5', 'ncRNA', 'intergenic'],
-    'protein_coding': ['intron', 'CDS', 'UTR3', 'UTR5'],
+    'whole_gene': ['intron', 'CDS', 'UTR3', 'UTR5'],
     'intergenic': ['intergenic'],
     'intron': ['intron'],
     'ncRNA': ['ncRNA'],
@@ -134,78 +134,21 @@ def parse_region_to_df(region_file):
     )
 
 
-def filter_protein_coding_region(df_in, gtf, peak_file):
-    """Filter crosslinks to remove those not in protein coding region.
+def filter_whole_gene_region(df_in):
+    """Filter crosslinks to remove those not in whole gene region.
 
-    Following regions are removed:
-    - exclude all regions that are not UTR5, UTR3, CDS, intron
-    - exons < 500nt
-    - introns < 500nt
-    - exons that don't have a paraclu peak
-    - the first and the last 5 nt of each intron
+    
     """
-    # prepare exons shorter then 500 for masking and longer for peaks inclusion
-    df_gtf = read_gtf(gtf)
-    df_gtf = df_gtf[(df_gtf['feature'] == 'exon')]
-    df_long = df_gtf[df_gtf.end - df_gtf.start >= 500]
-    df_gtf = df_gtf[df_gtf.end - df_gtf.start < 500]
-    df_gtf = df_gtf[['seqname', 'start', 'end', 'exon_id', 'score', 'strand']]
-    df_gtf.score = '.'
-    short_exons = pbt.BedTool.from_dataframe(df_gtf)
-    long_exons = pbt.BedTool.from_dataframe(df_long[['seqname', 'start', 'end', 'exon_id', 'score', 'strand']])
-    peaks = pbt.BedTool(peak_file)
-    exons_no_peak = long_exons.subtract(peaks, A=True)
-    # remove introns shorter then 500
-    df_in = df_in[~((df_in.region == 'intron') & (df_in.end - df_in.start < 500))]
-    # remove first and last 5 nucleotides from each intron
-    df_in[df_in.region == 'intron'].end = df_in[df_in.region == 'intron'].end - 5
-    df_in[df_in.region == 'intron'].start = df_in[df_in.region == 'intron'].start + 5
-    temp = pbt.BedTool.from_dataframe(df_in)
-    # remove short exons
-    temp = temp.subtract(short_exons)
-    temp = temp.subtract(exons_no_peak)
-    return temp.to_dataframe(
-        names=['chrom', 'second', 'region', 'start', 'end', 'sixth', 'strand', 'eighth', 'id_name_biotype'],
-        dtype={
-            'chrom': str, 'second': str, 'region': str, 'start': int, 'end': int, 'sixth': str, 'strand': str,
-            'eight': str, 'id_name_biotype': str
-        })
+
+    # remove regions shorter then 500
+    df_in = df_in[df_in.end - df_in.start >= 500]
+    # remove first and last 5 nucleotides from each region
+    df_in.end = df_in.end - 5
+    df_in.start = df_in.start + 5
+    return df_in
 
 
-def filter_protein_coding_reference(df_in, gtf):
-    """Filter reference crosslinks to remove ones not in protein coding region.
-
-    Following regions are removed:
-    - exclude all regions that are not UTR5, UTR3, CDS, intron
-    - exons < 500nt
-    - introns < 500nt
-    - exons that don't have a paraclu peak
-    - the first and the last 5 nt of each intron
-    """
-    # prepare exons shorter then 500 for masking and longer for peaks inclusion
-    df_gtf = read_gtf(gtf)
-    df_gtf = df_gtf[(df_gtf['feature'] == 'exon')]
-    df_gtf = df_gtf[df_gtf.end - df_gtf.start < 500]
-    df_gtf = df_gtf[['seqname', 'start', 'end', 'exon_id', 'score', 'strand']]
-    df_gtf.score = '.'
-    short_exons = pbt.BedTool.from_dataframe(df_gtf)
-    # remove introns shorter then 500
-    df_in = df_in[~((df_in.region == 'intron') & (df_in.end - df_in.start < 500))]
-    # remove first and last 5 nucleotides from each intron
-    df_in[df_in.region == 'intron'].end = df_in[df_in.region == 'intron'].end - 5
-    df_in[df_in.region == 'intron'].start = df_in[df_in.region == 'intron'].start + 5
-    temp = pbt.BedTool.from_dataframe(df_in)
-    # remove short exons
-    temp = temp.subtract(short_exons)
-    return temp.to_dataframe(
-        names=['chrom', 'second', 'region', 'start', 'end', 'sixth', 'strand', 'eighth', 'id_name_biotype'],
-        dtype={
-            'chrom': str, 'second': str, 'region': str, 'start': int, 'end': int, 'sixth': str, 'strand': str,
-            'eight': str, 'id_name_biotype': str
-        })
-
-
-def get_regions_map(regions_file, gtf, peak_file):
+def get_regions_map(regions_file):
     """Prepare temporary files based on GTF file that defines regions."""
     df_regions = pd.read_csv(
         regions_file, sep='\t', header=None,
@@ -222,10 +165,10 @@ def get_regions_map(regions_file, gtf, peak_file):
     df_utr3 = df_regions.loc[df_regions['region'] == 'UTR3']
     df_other_exon = df_regions.loc[(df_regions['region'] == 'UTR5') | (df_regions['region'] == 'CDS')]
     df_ncrna = df_regions.loc[df_regions['region'] == 'ncRNA']
-    df_protein_coding = df_regions.loc[~((df_regions['region'] == 'intergenic') | (df_regions['region'] == 'ncRNA'))]
-    df_pc_ref = df_protein_coding.copy()
-    df_protein_coding = filter_protein_coding_region(df_protein_coding, gtf, peak_file)
-    df_pc_ref = filter_protein_coding_reference(df_pc_ref, gtf)
+    df_whole_gene = df_regions.loc[~(df_regions['region'] == 'intergenic')]
+    df_pc_ref = df_whole_gene.copy()
+    df_whole_gene = filter_whole_gene_region(df_whole_gene)
+    df_pc_ref = filter_whole_gene_region(df_pc_ref)
 
     df_intron.to_csv('{}intron_regions.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
     df_utr3.to_csv('{}utr3_regions.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
@@ -233,8 +176,8 @@ def get_regions_map(regions_file, gtf, peak_file):
     df_ncrna.to_csv('{}ncRNA_regions.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
     df_intergenic.to_csv('{}intergenic_regions.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
     df_cds_utr_ncrna.to_csv('{}cds_utr_ncrna_regions.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
-    df_protein_coding.to_csv('{}protein_coding_region.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
-    df_pc_ref.to_csv('{}protein_coding_reference.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
+    df_whole_gene.to_csv('{}whole_gene_region.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
+    df_pc_ref.to_csv('{}whole_gene_reference.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
 
 
 def remove_chr(df_in, chr_sizes, chr_name='chrM'):
@@ -617,7 +560,7 @@ def get_clusters_names(c_dict, kmer_pos_count, k_length):
                 # enrichment
                 pos_base.sort()
                 positions.sort()
-                pwm = {p: {'A': 0, 'C': 0, 'G': 0, 'T': 0} for p in set(positions)}
+                pwm = {p: {'A': 0, 'C': 0, 'G': 0, 'U': 0} for p in set(positions)}
                 # count bases at each position
                 for tup in pos_base:
                     pwm[tup[0]][tup[2]] += 1
@@ -628,10 +571,10 @@ def get_clusters_names(c_dict, kmer_pos_count, k_length):
                     max_count = max(base_count.values())
                     max_count_bases = [base for base in base_count.keys() if base_count[base] == max_count]
                     consensus_positions[key].extend(max_count_bases)
-                # Build consensus obeying following rules: while consensus is shorter then length of analysed
-                # motifs and there was only one base with maxcount a that position add this base, if there are
+                # Build consensus obeying following rules: while consensus is shorter than the length of analysed
+                # motifs and there is only one base with maxcount a that position add this base, if there are
                 # several bases put all of them enclosed in [].
-                # when lenght of consensus is equal or larger then length of analysed motifs then rules for adding
+                # when lenght of consensus is equal or larger then the length of analysed motifs then rules for adding
                 # bases are stricter, only if there is single base at max count value and that base has count
                 # of more than 1 (i.e. if more the one motif distributions "agree" about that position) the base
                 # will get added.
@@ -655,15 +598,15 @@ def get_cluster_wide_averages(topkmer_pos_count, c_dict):
     """Calculate average positional distribution for each cluster."""
     df_in = pd.DataFrame(topkmer_pos_count)
     clusters = []
-    # for each cluster, calculate mean occurences at each position
+    # for each cluster, calculate sum of occurences at each position
     for cluster, motif in c_dict.items():
         df_cluster = df_in[motif].copy()
-        df_cluster[cluster] = df_cluster.mean(axis=1)
+        df_cluster[cluster] = df_cluster.sum(axis=1)
         clusters.append(df_cluster[cluster])
     return pd.concat(clusters, axis=1).rolling(5, center=True).mean().dropna()
 
 
-def plot_positional_distribution(df_in, df_mean, c_dict, c_rank, name, cluster_rename, region):
+def plot_positional_distribution(df_in, df_sum, c_dict, c_rank, name, cluster_rename, region):
     """Plot each cluster on its own plot.
 
     Also, plot combining the averages of clusters over a larger window.
@@ -691,19 +634,19 @@ def plot_positional_distribution(df_in, df_mean, c_dict, c_rank, name, cluster_r
         df_plot = df_in[c_dict[cluster]]
         df_plot = df_plot[df_plot.index.isin(range(-50, 51))]
         sns.lineplot(data=df_plot, ax=axs[axs_x, axs_y], **lineplot_kwrgs)
-    # final plot of averaged clusters in a wider window
-    df_ordered = df_mean[list(rank_ordered.values())].rename(columns=cluster_rename)
-    axs_x_meanplt = c_num // 2
-    axs_y_meanplt = c_num % 2
-    axs[axs_x_meanplt, axs_y_meanplt].set(
-        xlabel=xlabel, ylabel=ylabel, title='Average occurrence of kmers in each cluster'
+    # final plot of summed clusters in a wider window
+    df_ordered = df_sum[list(rank_ordered.values())].rename(columns=cluster_rename)
+    axs_x_sumplt = c_num // 2
+    axs_y_sumplt = c_num % 2
+    axs[axs_x_sumplt, axs_y_sumplt].set(
+        xlabel=xlabel, ylabel='Kmer cluster occurence (%)', title='Summed occurrence of kmers in each cluster'
     )
-    axs[axs_x_meanplt, axs_y_meanplt].set_xlim(-150, 100)
-    sns.lineplot(data=df_ordered, ax=axs[axs_x_meanplt, axs_y_meanplt], **lineplot_kwrgs)
+    axs[axs_x_sumplt, axs_y_sumplt].set_xlim(-150, 100)
+    sns.lineplot(data=df_ordered, ax=axs[axs_x_sumplt, axs_y_sumplt], **lineplot_kwrgs)
     fig.savefig('./results/' + name + '.pdf', format='pdf')
 
 
-def run(peak_file, sites_file, genome, genome_fai, regions_file, gtf_file, window, window_distal, kmer_length, top_n,
+def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_distal, kmer_length, top_n,
         percentile, min_relativ_occurence, clusters, smoothing, all_outputs=False):
     """Run."""
     sample_name = get_name(sites_file)
@@ -711,12 +654,12 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, gtf_file, windo
     TEMP_PATH = './TEMP{}/'.format(randint(10 ** 6, 10 ** 7))
     os.makedirs(TEMP_PATH)
     os.makedirs('./results/', exist_ok=True)
-    get_regions_map(regions_file, gtf_file, peak_file)
+    get_regions_map(regions_file)
     global REGIONS_MAP
     REGIONS_MAP = {
         'genome': None,
-        'protein_coding': '{}protein_coding_region.bed'.format(TEMP_PATH),
-        'protein_coding_reference': '{}protein_coding_reference.bed'.format(TEMP_PATH),
+        'whole_gene': '{}whole_gene_region.bed'.format(TEMP_PATH),
+        'whole_gene_reference': '{}whole_gene_reference.bed'.format(TEMP_PATH),
         'intron': '{}intron_regions.bed'.format(TEMP_PATH),
         'UTR3': '{}utr3_regions.bed'.format(TEMP_PATH),
         'other_exon': '{}other_exon_regions.bed'.format(TEMP_PATH),
@@ -753,8 +696,8 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, gtf_file, windo
         # finds all crosslink sites that are not in peaks as reference for
         # normalization
         complement = get_complement(peak_file, '{}genome.sizes'.format(TEMP_PATH))
-        if region == 'protein_coding':
-            complement = intersect(REGIONS_MAP['protein_coding_reference'], complement)
+        if region == 'whole_gene':
+            complement = intersect(REGIONS_MAP['whole_gene_reference'], complement)
         reference = intersect(complement, sites_file)
         noxn = len(reference)
         ntxn = len(sites)
@@ -767,7 +710,8 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, gtf_file, windo
         # get sequences around all thresholded crosslinks
         sequences = get_sequences(sites, genome, genome_fai, window_distal + kmer_length, window_distal + kmer_length)
         # get positional counts for all kmers around thresholded crosslinks
-        kmer_pos_count = pos_count_kmer(sequences, kmer_length, window_distal)
+        kmer_pos_count_T = pos_count_kmer(sequences, kmer_length, window_distal)
+        kmer_pos_count = {key.replace('T', 'U'): value for key, value in kmer_pos_count_T.items()}
         # get position where the kmer count is maximal
         max_p = get_max_pos(kmer_pos_count, window_peak_l=15, window_peak_r=15)
         # prepare dataframe for outfile
@@ -789,7 +733,8 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, gtf_file, windo
                 except ZeroDivisionError:
                     rtxn[motif][pos] = count
         # get positional counts for all kmers around all crosslink not in peaks
-        ref_pc = pos_count_kmer(reference_sequences, kmer_length, window)
+        ref_pc_T = pos_count_kmer(reference_sequences, kmer_length, window)
+        ref_pc = {key.replace('T', 'U'): value for key, value in ref_pc_T.items()}
         # occurences of kmers on each position around all crosslinks not in
         # peaks (reference) relative to distal occurences
         roxn = {x: {} for x in ref_pc}
@@ -823,7 +768,8 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, gtf_file, windo
         random_aroxn = []
         for _ in range(30):
             random_seqs = random.sample(reference_sequences, len(sites))
-            random_kmer_pos_count = pos_count_kmer(random_seqs, kmer_length, window)
+            random_kmer_pos_count_T = pos_count_kmer(random_seqs, kmer_length, window)
+            random_kmer_pos_count = {key.replace('T', 'U'): value for key, value in random_kmer_pos_count_T.items()}
             roxn_sample = {x: {} for x in random_kmer_pos_count}
             for motif, pos_m in random_kmer_pos_count.items():
                 for pos, count in pos_m.items():
@@ -910,21 +856,21 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, gtf_file, windo
                 writer.writerow([key, val])
         # calculating average occurences for the last plot that displays average
         # occurences for each cluster over wider window, also output as a file
-        df_cluster_mean = get_cluster_wide_averages(plot_selection, clusters_dict)
+        df_cluster_mean = get_cluster_wide_sum(plot_selection, clusters_dict)
 
-        mean_name = '{}_mean_cluster_distribution_{}.tsv'.format(sample_name, region)
+        sum_name = '{}_sum_cluster_distribution_{}.tsv'.format(sample_name, region)
         # find cluster with max average peak value, rank clusters by this value
         # and plot clusters in order using thie rank
-        clusters_max = {cluster: max(df_cluster_mean[cluster]) for cluster in df_cluster_mean.columns}
+        clusters_max = {cluster: max(df_cluster_sum[cluster]) for cluster in df_cluster_sum.columns}
         clusters_rank = {
             key: rank for rank, key in enumerate(sorted(clusters_max, key=clusters_max.get, reverse=True), 1)}
         # using positions and occurences each cluster gets a name
         cluster_rename = get_clusters_names(clusters_dict, kmer_pos_count, kmer_length)
-        df_cluster_mean.rename(columns=cluster_rename).to_csv('./results/' + mean_name, sep='\t')
+        df_cluster_sum.rename(columns=cluster_rename).to_csv('./results/' + sum_name, sep='\t')
         # finnaly plot all the clusters and the wider window (-150 to 100) plot
         # with average occurences
         plot_positional_distribution(
-            df_smooth, df_cluster_mean, clusters_dict, clusters_rank, sample_name, cluster_rename, region)
+            df_smooth, df_cluster_sum, clusters_dict, clusters_rank, sample_name, cluster_rename, region)
 
     # cleanup temporary files
     shutil.rmtree(TEMP_PATH)
