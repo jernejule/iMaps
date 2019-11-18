@@ -594,7 +594,7 @@ def get_clusters_names(c_dict, kmer_pos_count, k_length):
     return c_con_dict
 
 
-def get_cluster_wide_averages(topkmer_pos_count, c_dict):
+def get_cluster_wide_sum(topkmer_pos_count, c_dict):
     """Calculate average positional distribution for each cluster."""
     df_in = pd.DataFrame(topkmer_pos_count)
     clusters = []
@@ -648,7 +648,28 @@ def plot_positional_distribution(df_in, df_sum, c_dict, c_rank, name, cluster_re
 
 def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_distal, kmer_length, top_n,
         percentile, min_relativ_occurence, clusters, smoothing, all_outputs=False):
-    """Run."""
+    """Start the analysis.
+    
+    Description of parameters:
+    - peak_file: intervals of crosslinks in BED file format
+    - sites_file: crosslinks in BED file format
+    - genome: FASTA file format, preferably same as was used for alignement
+    - genome_fai: FASTA index file
+    - regions_file: custom genome segmentation file
+    - window: region around (thresholded) crosslinks where positional
+      distributions are obtained by counting kmers per position (default 60)
+    - window_distal: region considered for backround distribution (default 150)
+    - kmer_length: lenght (in nucleotides) of kmers to be analysed (default 4,
+      tested up to 7)
+    - top_n: number of kmers ranked by z-score in descending order for
+      clustering and plotting (default 20)
+    - percentile: used for thresholding crosslinks (default 0.7)
+    - min_relative_occurence: ratio of kmer distribution around (thresholded)
+      crosslinks to distal occurences (default 1.5)
+    - clusters: number of clusters of kmers(default 5)
+    - smoothing: window used for smoothing kmer positional distribution curves
+    - all_outputs: controls amount of outputs produced in the analysis
+    """
     sample_name = get_name(sites_file)
     global TEMP_PATH
     TEMP_PATH = './TEMP{}/'.format(randint(10 ** 6, 10 ** 7))
@@ -856,7 +877,7 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
                 writer.writerow([key, val])
         # calculating average occurences for the last plot that displays average
         # occurences for each cluster over wider window, also output as a file
-        df_cluster_mean = get_cluster_wide_sum(plot_selection, clusters_dict)
+        df_cluster_sum = get_cluster_wide_sum(plot_selection, clusters_dict)
 
         sum_name = '{}_sum_cluster_distribution_{}.tsv'.format(sample_name, region)
         # find cluster with max average peak value, rank clusters by this value
