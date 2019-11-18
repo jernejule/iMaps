@@ -77,15 +77,6 @@ from gtfparse import read_gtf
 import scipy
 
 
-REGION_TYPES = [
-    'genome',
-    'whole_gene',
-    'intergenic',
-    'intron',
-    'UTR3',
-    'other_exon',
-    'ncRNA'
-]
 REGION_SITES = {
     'genome': ['intron', 'CDS', 'UTR3', 'UTR5', 'ncRNA', 'intergenic'],
     'whole_gene': ['intron', 'CDS', 'UTR3', 'UTR5'],
@@ -134,18 +125,20 @@ def parse_region_to_df(region_file):
     )
 
 
-def filter_whole_gene_region(df_in):
+def filter_region(df_in, min_size):
     """Filter crosslinks to remove those not in whole gene region.
 
     
     """
 
-    # remove regions shorter then 500
-    df_in = df_in[df_in.end - df_in.start >= 500]
+    # remove regions shorter then min_size
+    df_in = df_in[df_in.end - df_in.start >= min_size]
     # remove first and last 5 nucleotides from each region
-    df_in.end = df_in.end - 5
-    df_in.start = df_in.start + 5
+    df_in.end = df_in.end - 30
+    df_in.start = df_in.start + 30
     return df_in
+
+
 
 
 def get_regions_map(regions_file):
@@ -167,8 +160,9 @@ def get_regions_map(regions_file):
     df_ncrna = df_regions.loc[df_regions['region'] == 'ncRNA']
     df_whole_gene = df_regions.loc[~(df_regions['region'] == 'intergenic')]
     df_pc_ref = df_whole_gene.copy()
-    df_whole_gene = filter_whole_gene_region(df_whole_gene)
-    df_pc_ref = filter_whole_gene_region(df_pc_ref)
+    df_whole_gene = filter_region(df_whole_gene, 500)
+    df_pc_ref = filter_region(df_pc_ref, 500)
+    df_other_exon = filter_region(df_other_exon, 100)
 
     df_intron.to_csv('{}intron_regions.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
     df_utr3.to_csv('{}utr3_regions.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
@@ -653,19 +647,19 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
     Description of parameters:
     - peak_file: intervals of crosslinks in BED file format
     - sites_file: crosslinks in BED file format
-    - genome: FASTA file format, preferably same as was used for alignement
+    - genome: FASTA file format, preferably the same as was used for alignment
     - genome_fai: FASTA index file
     - regions_file: custom genome segmentation file
     - window: region around (thresholded) crosslinks where positional
       distributions are obtained by counting kmers per position (default 60)
-    - window_distal: region considered for backround distribution (default 150)
-    - kmer_length: lenght (in nucleotides) of kmers to be analysed (default 4,
+    - window_distal: region considered for background distribution (default 150)
+    - kmer_length: length (in nucleotides) of kmers to be analysed (default 4,
       tested up to 7)
     - top_n: number of kmers ranked by z-score in descending order for
       clustering and plotting (default 20)
     - percentile: used for thresholding crosslinks (default 0.7)
     - min_relative_occurence: ratio of kmer distribution around (thresholded)
-      crosslinks to distal occurences (default 1.5)
+      crosslinks to distal occurrences (default 1.5)
     - clusters: number of clusters of kmers(default 5)
     - smoothing: window used for smoothing kmer positional distribution curves
     - all_outputs: controls amount of outputs produced in the analysis
