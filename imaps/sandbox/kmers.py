@@ -851,11 +851,7 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
         # kmer positional occurences around thresholded crosslinks on positions
         # around -50 to 50 are also added to outfile table which is then finnaly
         # written to file
-        df_otxn = pd.DataFrame.from_dict(kmer_pos_count, orient='index')
-        exported_columns = [i for i in range(-48, 51)]
-        df_otxn = df_otxn[exported_columns]
-        df_out = pd.merge(df_out, df_otxn, left_index=True, right_index=True, how='outer')
-        df_out.to_csv(f'./results/{sample_name}_{kmer_length}mer_{region}.tsv', sep='\t')
+
 
         # get order of z-scores to select top kmers to plot
         kmers_order_of_enrichment = get_top_n_kmers(z_score, 4**kmer_length)
@@ -866,7 +862,13 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
         kmer_occ_per_txl = {x: {} for x in kmer_pos_count}
         for motif, pos_m in kmer_pos_count.items():
             for pos, count in pos_m.items():
-                kmer_occ_per_txl[motif][pos] = count / ntxn
+                kmer_occ_per_txl[motif][pos] = count * 100 / ntxn
+
+        df_kmer_occ_per_txl = pd.DataFrame.from_dict(kmer_occ_per_txl, orient='index')
+        exported_columns = [i for i in range(-48, 51)]
+        df_kmer_occ_per_txl = df_kmer_occ_per_txl[exported_columns]
+        df_out = pd.merge(df_out, df_kmer_occ_per_txl, left_index=True, right_index=True, how='outer')
+        df_out.to_csv(f'./results/{sample_name}_{kmer_length}mer_{region}.tsv', sep='\t')
 
         plot_selection = {kmer: values for kmer, values in kmer_occ_per_txl.items() if kmer in top_kmers}
         df_smooth, clusters_dict = get_clustering(plot_selection, kmer_pos_count, smoothing, clusters)
