@@ -763,11 +763,21 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
         # where relative occurence is higher then an arbitrary value (minimal
         # relative occurence), default 1.5
         prtxn = {x: [] for x in rtxn}
-        relevant_pos = list(range(-window + int((kmer_length + 1) / 2), window + 1 + int((kmer_length + 1) / 2)))
-        for pos in relevant_pos:
-            for motif, pos_m in rtxn.items():
-                if pos_m[pos] > min_relativ_occurence:
-                    prtxn[motif].append(pos)
+        window_inner = int(window / 3)
+        min_relativ_occurence_inner = 1 + ((min_relativ_occurence - 1) / 2)
+        relevant_pos_inner = list(range(-window_inner + int((kmer_length + 1) / 2), window_inner + 1 + int((kmer_length + 1) / 2)))
+        relevant_pos_outer = list(range(-window + int((kmer_length + 1) / 2), window + 1 + int((kmer_length + 1) / 2)))
+            
+        for i in relevant_pos_outer:
+            if i in relevant_pos_inner:
+                for m, pm in rtxn.items():
+                    if pm[i] > min_relativ_occurence_inner:
+                        prtxn[m].append(i)
+            else:
+                for m, pm in rtxn.items():
+                    if pm[i] > min_relativ_occurence_outer:
+                        prtxn[m].append(i)
+                        
         # prepare relevant positions obtained from previous step for output
         # table and add it to the output table
         prtxn_concat = {}
