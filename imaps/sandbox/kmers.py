@@ -765,7 +765,7 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
                         prtxn[m].append(i)
             else:
                 for m, pm in rtxn.items():
-                    if pm[i] > min_relativ_occurence_outer:
+                    if pm[i] > min_relativ_occurence:
                         prtxn[m].append(i)
                         
         # prepare relevant positions obtained from previous step for output
