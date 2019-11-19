@@ -73,7 +73,6 @@ import seaborn as sns
 from sklearn.cluster import KMeans
 from plumbum import local
 from plumbum.cmd import zcat, sort
-from gtfparse import read_gtf
 import scipy
 
 
@@ -288,15 +287,6 @@ def cut_sites_with_region(df_sites, df_region):
         df_temp = df_temp[df_cut.columns]
         df_cut = pd.concat([df_cut, df_temp], ignore_index=True)
     return df_cut.dropna(axis=0)
-
-
-def filter_xlinks(df_in):
-    """Calculate threshold in each peak and filter sites by it."""
-    df_in['cut'] = df_in['cut'].astype(str)
-    df_in['max_cDNA_count'] = df_in['cut'].map(df_in.groupby('cut').max()['score'])
-    df_in['threshold'] = df_in['max_cDNA_count'].apply(lambda x: 2 if x <= 4 else x / 2)
-    df_in = df_in[df_in['score'] > df_in['threshold']]
-    return pbt.BedTool.from_dataframe(df_in[['chrom', 'start', 'end', 'name', 'score', 'strand']])
 
 
 def percentile_filter_xlinks(df_in, percentile=0.7):
@@ -613,7 +603,7 @@ def plot_positional_distribution(df_in, df_sum, c_dict, c_rank, name, cluster_re
     fig.suptitle(f'{name}_{region}', fontsize=20)
     lineplot_kwrgs = {'palette': "tab10", 'linewidth': 1, 'dashes': False, }
     xlabel = 'Positions of kmer start relative to crosslinks'
-    ylabel = 'Kmer occurence (%)'
+    ylabel = 'Kmer occurence per thresholded crosslinks (%)'
     rank_c = {y: x for x, y in c_rank.items()}
     rank_ordered = OrderedDict(sorted(rank_c.items()))
     # plot clusters in order starting from cluster with highest average max
