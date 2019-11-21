@@ -94,6 +94,7 @@ REGION_SITES = {
     'ncRNA': ['ncRNA'],
     'other_exon': ['UTR5', 'CDS'],
     'UTR3': ['UTR3'],
+    'UTR5': ['UTR5']
 }
 REGIONS_QUANTILE = [
     'intron',
@@ -165,6 +166,7 @@ def get_regions_map(regions_file):
         ['CDS', 'UTR3', 'UTR5', 'ncRNA'])]
     df_intron = df_regions.loc[df_regions['region'] == 'intron']
     df_utr3 = df_regions.loc[df_regions['region'] == 'UTR3']
+    df_utr5 = df_regions.loc[df_regions['region'] == 'UTR5']
     df_other_exon = df_regions.loc[(df_regions['region'] == 'UTR5') | (df_regions['region'] == 'CDS')]
     df_ncrna = df_regions.loc[df_regions['region'] == 'ncRNA']
     df_whole_gene = df_regions.loc[~(df_regions['region'] == 'intergenic')]
@@ -175,6 +177,7 @@ def get_regions_map(regions_file):
 
     df_intron.to_csv('{}intron_regions.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
     df_utr3.to_csv('{}utr3_regions.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
+    df_utr5.to_csv('{}utr5_regions.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
     df_other_exon.to_csv('{}other_exon_regions.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
     df_ncrna.to_csv('{}ncRNA_regions.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
     df_intergenic.to_csv('{}intergenic_regions.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
