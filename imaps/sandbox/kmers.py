@@ -906,7 +906,6 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
         kmer_occ_per_txl_norm = {x: {} for x in kmer_occ_per_txl}
         for motif, pos_m in kmer_occ_per_txl.items():
             sum_pos_m = sum(pos_m.values())
-            print(motif, pos_m, sum_pos_m)
             for pos, count in pos_m.items():
                 kmer_occ_per_txl_norm[motif][pos] = count / sum_pos_m
         plot_selection = {kmer: values for kmer, values in kmer_occ_per_txl.items() if kmer in top_kmers}
