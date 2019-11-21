@@ -75,6 +75,16 @@ from plumbum import local
 from plumbum.cmd import zcat, sort
 import scipy
 
+regions = [
+    'whole_gene',
+    'introns',
+    'UTR3',
+    'other_exon',
+    'UTR5',
+    'ncRNA',
+    'intergenic',
+    'whole_gene'
+]
 
 REGION_SITES = {
     'genome': ['intron', 'CDS', 'UTR3', 'UTR5', 'ncRNA', 'intergenic'],
@@ -617,7 +627,7 @@ def plot_positional_distribution(df_in, df_sum, c_dict, c_rank, name, cluster_re
         axs[axs_x, axs_y].set(xlabel=xlabel, ylabel=ylabel, title='Cluster of kmers {}'.format(c_name))
         df_plot = df_in[c_dict[cluster]]
         df_plot = df_plot[df_plot.index.isin(range(-50, 51))]
-        sns.lineplot(data=df_plot, ax=axs[axs_x, axs_y], **lineplot_kwrgs)
+        sns.lineplot(data=df_plot, ax=axs[axs_x, axs_y], ci=None, **lineplot_kwrgs)
     # final plot of summed clusters in a wider window
     df_ordered = df_sum[list(rank_ordered.values())].rename(columns=cluster_rename)
     axs_x_sumplt = c_num // 2
@@ -626,7 +636,7 @@ def plot_positional_distribution(df_in, df_sum, c_dict, c_rank, name, cluster_re
         xlabel=xlabel, ylabel='Kmer cluster occurence (%)', title='Summed occurrence of kmers in each cluster'
     )
     axs[axs_x_sumplt, axs_y_sumplt].set_xlim(-150, 100)
-    sns.lineplot(data=df_ordered, ax=axs[axs_x_sumplt, axs_y_sumplt], **lineplot_kwrgs)
+    sns.lineplot(data=df_ordered, ax=axs[axs_x_sumplt, axs_y_sumplt], ci=None, **lineplot_kwrgs)
     fig.savefig('./results/' + name + '.pdf', format='pdf')
 
 
@@ -644,15 +654,15 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
       distributions are obtained by counting kmers per position (default 60)
     - window_distal: region considered for background distribution (default 150)
     - kmer_length: length (in nucleotides) of kmers to be analysed (default 4,
-      tested up to 7)
+      with option between 3 and 7)
     - top_n: number of kmers ranked by z-score in descending order for
       clustering and plotting (default 20)
     - percentile: used for thresholding crosslinks (default 0.7)
     - min_relative_occurence: ratio of kmer distribution around (thresholded)
-      crosslinks to distal occurrences (default 1.5)
+      crosslinks to distal occurrences (default 2)
     - clusters: number of clusters of kmers(default 5)
     - smoothing: window used for smoothing kmer positional distribution curves
-    - all_outputs: controls amount of outputs produced in the analysis
+    - all_outputs: controls the amount of outputs produced in the analysis
     """
     sample_name = get_name(sites_file)
     global TEMP_PATH
@@ -686,7 +696,7 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
         file.write(make_genome_sz)
     df_txn = remove_chr(df_txn, '{}genome.sizes'.format(TEMP_PATH))
 
-    for region in REGION_SITES:
+    for region in regions:
         # Parse sites file and keep only parts that intersect with given region
         df_sites = df_txn.loc[df_txn['feature'].isin(REGION_SITES[region])]
         sites = pbt.BedTool.from_dataframe(
