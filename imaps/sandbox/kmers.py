@@ -77,7 +77,7 @@ import scipy
 
 regions = [
     'whole_gene',
-    'introns',
+    'intron',
     'UTR3',
     'other_exon',
     'UTR5',
