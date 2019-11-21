@@ -360,6 +360,28 @@ def get_threshold_sites(s_file, percentile=0.7):
     return df_out.sort_values(by=['chrom', 'start', 'strand'], ascending=[True, True, True]).reset_index(drop=True)
 
 
+def get_all_sites(s_file):
+    """Get crosslink data into appropriate dataframe without thresholding."""
+    df_out = pd.DataFrame(columns=['chrom', 'start', 'end', 'name', 'score',
+                                   'strand', 'feature', 'attributes'])
+
+    for region in REGIONS_QUANTILE:
+        df_reg = intersect_merge_info(region, s_file)
+        if df_reg.empty:
+            continue
+        if region == 'cds_utr_ncrna':
+            df_reg.name = df_reg.attributes.map(lambda x: x.split(';')[1].split(' ')[1].strip('"'))
+            df_reg['quantile'] = None
+            df_out = pd.concat([df_out, df_reg], ignore_index=True)
+        if region in ['intron', 'intergenic']:
+            df_region = parse_region_to_df(REGIONS_MAP[region])
+            df_cut = cut_sites_with_region(df_reg, df_region)
+            df_filtered = df_cut[['chrom', 'start', 'end', 'name', 'score', 'strand', 'feature', 'attributes']]
+            df_out = pd.concat([df_out, df_filtered], ignore_index=True)
+    return df_out.sort_values(by=['chrom', 'start', 'strand'],
+                              ascending=[True, True, True]).reset_index(drop=True)
+
+
 def get_sequences(sites, fasta, fai, window_l, window_r, merge_overlaps=False):
     """Get genome sequences around positions defined in sites."""
     sites = pbt.BedTool(sites).sort()
@@ -680,6 +702,7 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
         'whole_gene_reference': '{}whole_gene_reference.bed'.format(TEMP_PATH),
         'intron': '{}intron_regions.bed'.format(TEMP_PATH),
         'UTR3': '{}utr3_regions.bed'.format(TEMP_PATH),
+        'UTR5': '{}utr5_regions.bed'.format(TEMP_PATH),
         'other_exon': '{}other_exon_regions.bed'.format(TEMP_PATH),
         'ncRNA': '{}ncRNA_regions.bed'.format(TEMP_PATH),
         'intergenic': '{}intergenic_regions.bed'.format(TEMP_PATH),
@@ -698,10 +721,12 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
     with open(genome_chr_sizes, 'w') as file:
         file.write(make_genome_sz)
     df_txn = remove_chr(df_txn, '{}genome.sizes'.format(TEMP_PATH))
+    df_xn = get_all_sites(sites_file)
 
     for region in regions:
         # Parse sites file and keep only parts that intersect with given region
         df_sites = df_txn.loc[df_txn['feature'].isin(REGION_SITES[region])]
+        df_xn_region = df_xn.loc[df_xn['feature'].isin(REGION_SITES[region])]
         sites = pbt.BedTool.from_dataframe(
             df_sites[['chrom', 'start', 'end', 'name', 'score', 'strand']])
         if all_outputs:
@@ -711,12 +736,13 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
             print(f'less then 100 thresholded crosslink in {region}')
             continue
 
+        all_sites = pbt.BedTool.from_dataframe(df_xn[['chrom', 'start', 'end', 'name', 'score', 'strand']])
         # finds all crosslink sites that are not in peaks as reference for
         # normalization
         complement = get_complement(peak_file, '{}genome.sizes'.format(TEMP_PATH))
         if region == 'whole_gene':
             complement = intersect(REGIONS_MAP['whole_gene_reference'], complement)
-        reference = intersect(complement, sites_file)
+        reference = intersect(complement, all_sites)
         noxn = len(reference)
         ntxn = len(sites)
         if all_outputs:
@@ -764,13 +790,12 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
                     roxn[motif][pos] = (count * ntxn) / noxn
         # get all positions around thresholded crosslinks between -60 and 60
         # where relative occurence is higher then an arbitrary value (minimal
-        # relative occurence), default 1.5
+        # relative occurence), default 2
         prtxn = {x: [] for x in rtxn}
         window_inner = int(window / 3)
         min_relativ_occurence_inner = 1 + ((min_relativ_occurence - 1) / 2)
         relevant_pos_inner = list(range(-window_inner + int((kmer_length + 1) / 2), window_inner + 1 + int((kmer_length + 1) / 2)))
         relevant_pos_outer = list(range(-window + int((kmer_length + 1) / 2), window + 1 + int((kmer_length + 1) / 2)))
-            
         for i in relevant_pos_outer:
             if i in relevant_pos_inner:
                 for m, pm in rtxn.items():
@@ -780,7 +805,9 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
                 for m, pm in rtxn.items():
                     if pm[i] > min_relativ_occurence:
                         prtxn[m].append(i)
-                        
+        for motif, rp in prtxn.items():
+            if not rp:
+                rp.extend([-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5])
         # prepare relevant positions obtained from previous step for output
         # table and add it to the output table
         prtxn_concat = {}
@@ -876,9 +903,14 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
         df_kmer_occ_per_txl = df_kmer_occ_per_txl[exported_columns]
         df_out = pd.merge(df_out, df_kmer_occ_per_txl, left_index=True, right_index=True, how='outer')
         df_out.to_csv(f'./results/{sample_name}_{kmer_length}mer_{region}.tsv', sep='\t')
-
+        kmer_occ_per_txl_norm = {x: {} for x in kmer_occ_per_txl}
+        for motif, pos_m in kmer_occ_per_txl.items():
+            sum_pos_m = sum(pos_m.values())
+            print(motif, pos_m, sum_pos_m)
+            for pos, count in pos_m.items():
+                kmer_occ_per_txl_norm[motif][pos] = count / sum_pos_m
         plot_selection = {kmer: values for kmer, values in kmer_occ_per_txl.items() if kmer in top_kmers}
-        df_smooth, clusters_dict = get_clustering(plot_selection, kmer_pos_count, smoothing, clusters)
+        df_smooth, clusters_dict = get_clustering(plot_selection, kmer_occ_per_txl_norm, smoothing, clusters)
         # for meta analysis clusters are also output in a file
         with open('./results/{}_clusters.csv'.format(sample_name), 'w', newline='') as file:
             writer = csv.writer(file, lineterminator='\n')
