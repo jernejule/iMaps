@@ -83,7 +83,7 @@ regions = [
     'UTR5',
     'ncRNA',
     'intergenic',
-    'whole_gene'
+    'genome'
 ]
 
 REGION_SITES = {
