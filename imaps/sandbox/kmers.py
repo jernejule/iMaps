@@ -13,11 +13,12 @@ different:
 - whole genome,
 - introns,
 - 3'UTR eksons,
+- 5'UTR eksons,
 - all other coding exon regions,
 - ncRNA (all other genes),
 - intergenic,
-- protein coding (includes UTR5, UTR3, CDS, intron, excludes exons < 500,
-  exons > 500 that don't have a peak and introns shorter than 500nt)
+- whole gene
+For whole gene and other exons
 Proceed only with those regions where tXn>100. For all analyses, exclude
 chrM and those scaffolds not included in the genome annotations.
 For each kmer, first count occurences at each specific position relative to
@@ -56,7 +57,7 @@ tables are saved and available for inspection.
 """
 
 import os
-from itertools import product
+from itertools import product, combinations
 from collections import OrderedDict
 import csv
 import random
@@ -64,6 +65,7 @@ from random import randint
 import shutil
 import gzip
 import copy
+import time
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -71,6 +73,7 @@ import pandas as pd
 import pybedtools as pbt
 import seaborn as sns
 from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
 from plumbum import local
 from plumbum.cmd import zcat, sort
 import scipy
@@ -83,7 +86,7 @@ regions = [
     'UTR5',
     'ncRNA',
     'intergenic',
-    'whole_gene'
+    'genome'
 ]
 
 REGION_SITES = {
@@ -103,6 +106,21 @@ REGIONS_QUANTILE = [
 ]
 REGIONS_MAP = {}
 TEMP_PATH = None
+
+
+# overriding pybedtools to_dataframe method to avoid warning
+def to_dataframe_fixed(self, *args, **kwargs):
+    """
+    create a pandas.DataFrame, passing args and kwargs to pandas.read_csv
+
+    This function overrides pybedtools function to avoid FutureWarning: 
+    read_table is deprecated, use read_csv instead, passing sep='\t'.
+    return pandas.read_table(self.fn, *args, **kwargs). Pandas must be 
+    imported as pd, it is advisable to specify dtype and names as well.
+    """
+    return pd.read_csv(self.fn, header=None, sep='\t', *args, **kwargs)
+
+pbt.BedTool.to_dataframe = to_dataframe_fixed  # required for overriding
 
 
 def get_name(s_file):
@@ -135,20 +153,27 @@ def parse_region_to_df(region_file):
     )
 
 
-def filter_region(df_in, min_size):
-    """Filter crosslinks to remove those not in whole gene region.
+def filter_cds_utr_ncrna(df_in):
+    """Filter regions CDS, UTR5, UTR3 and ncRNA by size and trim"""
+    utr5 = df_in.region == 'UTR5'
+    cds = df_in.region == 'CDS'
+    utr3 = df_in.region == 'UTR3'
+    ncrna = df_in.region == 'ncRNA'
+    longer = df_in.end - df_in.start >= 300
+    short = df_in.end - df_in.start >= 100
+    df_out = df_in[(utr5 & longer) | (cds & short) | (utr3 & longer) | ncrna].copy()
+    df_out.loc[df_out['region'] == 'UTR3', ['start']] = df_out.start + 30
+    df_out.loc[df_out['region'] == 'UTR5', ['end']] = df_out.end - 30
+    df_out.loc[df_out['region'] == 'CDS', ['start']] = df_out.start + 30
+    df_out.loc[df_out['region'] == 'CDS', ['end']] = df_out.end - 30
+    return df_out
 
-    
-    """
 
+def filter_intron(df_in, min_size):
+    """Filter intron regions to remove those smaller than min_size."""
     # remove regions shorter then min_size
-    df_in = df_in[df_in.end - df_in.start >= min_size]
-    # remove first and last 5 nucleotides from each region
-    df_in.end = df_in.end - 30
-    df_in.start = df_in.start + 30
-    return df_in
-
-
+    df_out = df_in[df_in.end - df_in.start >= min_size].copy()
+    return df_out
 
 
 def get_regions_map(regions_file):
@@ -161,29 +186,15 @@ def get_regions_map(regions_file):
             'eight': str, 'id_name_biotype': str
         }
     )
-    df_intergenic = df_regions[df_regions['region'] == 'intergenic']
-    df_cds_utr_ncrna = df_regions[df_regions['region'].isin(
-        ['CDS', 'UTR3', 'UTR5', 'ncRNA'])]
+    df_intergenic = df_regions.loc[df_regions['region'] == 'intergenic']
+    df_cds_utr_ncrna = df_regions.loc[df_regions['region'].isin(['CDS', 'UTR3', 'UTR5', 'ncRNA'])]
     df_intron = df_regions.loc[df_regions['region'] == 'intron']
-    df_utr3 = df_regions.loc[df_regions['region'] == 'UTR3']
-    df_utr5 = df_regions.loc[df_regions['region'] == 'UTR5']
-    df_other_exon = df_regions.loc[(df_regions['region'] == 'UTR5') | (df_regions['region'] == 'CDS')]
-    df_ncrna = df_regions.loc[df_regions['region'] == 'ncRNA']
-    df_whole_gene = df_regions.loc[~(df_regions['region'] == 'intergenic')]
-    df_pc_ref = df_whole_gene.copy()
-    df_whole_gene = filter_region(df_whole_gene, 500)
-    df_pc_ref = filter_region(df_pc_ref, 500)
-    df_other_exon = filter_region(df_other_exon, 100)
-
-    df_intron.to_csv('{}intron_regions.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
-    df_utr3.to_csv('{}utr3_regions.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
-    df_utr5.to_csv('{}utr5_regions.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
-    df_other_exon.to_csv('{}other_exon_regions.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
-    df_ncrna.to_csv('{}ncRNA_regions.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
-    df_intergenic.to_csv('{}intergenic_regions.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
-    df_cds_utr_ncrna.to_csv('{}cds_utr_ncrna_regions.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
-    df_whole_gene.to_csv('{}whole_gene_region.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
-    df_pc_ref.to_csv('{}whole_gene_reference.bed'.format(TEMP_PATH), sep='\t', header=None, index=None)
+    df_cds_utr_ncrna = filter_cds_utr_ncrna(df_cds_utr_ncrna)
+    df_intron = filter_intron(df_intron, 300)
+    to_csv_kwrgs = {'sep': '\t', 'header': None, 'index': None}
+    df_intron.to_csv('{}intron_regions.bed'.format(TEMP_PATH), **to_csv_kwrgs)
+    df_intergenic.to_csv('{}intergenic_regions.bed'.format(TEMP_PATH), **to_csv_kwrgs)
+    df_cds_utr_ncrna.to_csv('{}cds_utr_ncrna_regions.bed'.format(TEMP_PATH), **to_csv_kwrgs)
 
 
 def remove_chr(df_in, chr_sizes, chr_name='chrM'):
@@ -220,10 +231,8 @@ def get_complement(interval_file, chrsizes_file):
         except OSError:
             print('{} has .gz in path/name but seems to not be gzipped')
             return
-
         interval_file_name = interval_file.split('/')[-1].replace('.gz', "")
         temp_file_interval = '{}{}.TEMPORARY'.format(TEMP_PATH, interval_file_name)
-
         get_sorted = (zcat[interval_file] | sort['-k1,1', '-k2,2n', '-k3,3n'])
         sorted_interval = get_sorted()
         with open(temp_file_interval, 'w') as file:
@@ -233,24 +242,22 @@ def get_complement(interval_file, chrsizes_file):
         sorted_file = sort('-k1,1', '-k2,2n', '-k3,3n', interval_file)
         with open(temp_file_interval, 'w') as file:
             file.write(sorted_file)
-
     df_interval = parse_bed6_to_df(temp_file_interval)
     df_interval = remove_chr(df_interval, chrsizes_file)
     df_interval_p = df_interval[df_interval['strand'] == '+'].copy()
     df_interval_m = df_interval[df_interval['strand'] == '-'].copy()
     interval_p = pbt.BedTool.from_dataframe(df_interval_p)
     interval_m = pbt.BedTool.from_dataframe(df_interval_m)
-
     temp_file = chrsizes_file + '.TEMPORARY'
     temporary_file = sort('-k1,1', '-k2,2', chrsizes_file)
     with open(temp_file, 'w') as file:
         file.write(temporary_file)
-
     complement_interval_p = interval_p.complement(g=temp_file)
     complement_interval_m = interval_m.complement(g=temp_file)
-
-    df_interval_complement_p = complement_interval_p.to_dataframe(dtype={'chrom': str, 'start': int, 'end': int})
-    df_interval_complement_m = complement_interval_m.to_dataframe(dtype={'chrom': str, 'start': int, 'end': int})
+    df_interval_complement_p = complement_interval_p.to_dataframe(
+        names = ['chrom', 'start', 'end'], dtype={'chrom': str, 'start': int, 'end': int})
+    df_interval_complement_m = complement_interval_m.to_dataframe(
+        names = ['chrom', 'start', 'end'], dtype={'chrom': str, 'start': int, 'end': int})
     df_interval_complement_p['name'] = '.'
     df_interval_complement_p['score'] = '.'
     df_interval_complement_p['strand'] = '+'
@@ -315,13 +322,15 @@ def intersect_merge_info(region, s_file):
     interval_file = REGIONS_MAP[region]
     try:
         df_1 = intersect(interval_file, s_file).to_dataframe(
+            names = ['chrom', 'start', 'end', 'name', 'score', 'strand'],
             dtype={'chrom': str, 'start': int, 'end': int, 'name': str, 'score': float, 'strand': str}
         )
         df_1 = df_1.groupby(['chrom', 'start', 'end', 'strand'], as_index=False)['score'].sum(axis=0)
         df_1['name'] = '.'
         df_2 = intersect(s_file, interval_file).to_dataframe(
+            names = ['seqname', 'source', 'feature', 'start', 'end', 'score', 'strand', 'frame', 'attributes'],
             dtype={'seqname': str, 'source': str, 'feature': str, 'start': int, 'end': int, 'score': str,
-                   'strand': str, 'frame': str, 'attributes': str}
+                'strand': str, 'frame': str, 'attributes': str}
         )
         df_2.drop_duplicates(subset=['seqname', 'start', 'end', 'strand'], keep='first')
     except AttributeError:
@@ -340,31 +349,30 @@ def get_threshold_sites(s_file, percentile=0.7):
     sorted.
     """
     df_out = pd.DataFrame(columns=['chrom', 'start', 'end', 'name', 'score', 'strand', 'feature', 'attributes'])
-
     for region in REGIONS_QUANTILE:
+        print(f'Thresholding {region}')
+        region_threshold_cp = time.time()
         df_reg = intersect_merge_info(region, s_file)
         print(f'lenght of df_reg for {region} is: {len(df_reg)}')
         if df_reg is None:
             return
-
         if region == 'cds_utr_ncrna':
             df_reg.name = df_reg.attributes.map(lambda x: x.split(';')[1].split(' ')[1].strip('"'))
             df_reg['quantile'] = df_reg['name'].map(df_reg.groupby(['name']).quantile(q=percentile)['score'])
             df_filtered = df_reg[df_reg['score'] > df_reg['quantile']].drop(columns=['quantile'])
-            df_out = pd.concat([df_out, df_filtered], ignore_index=True)
+            df_out = pd.concat([df_out, df_filtered], ignore_index=True, sort=False)
         if region in ['intron', 'intergenic']:
             df_region = parse_region_to_df(REGIONS_MAP[region])
             df_cut = cut_sites_with_region(df_reg, df_region)
             df_filtered = percentile_filter_xlinks(df_cut)
-            df_out = pd.concat([df_out, df_filtered], ignore_index=True)
+            df_out = pd.concat([df_out, df_filtered], ignore_index=True, sort=False)
+        print(f'Thresholding {region} runtime: {((time.time() - region_threshold_cp) / 60):.2f} min')
     return df_out.sort_values(by=['chrom', 'start', 'strand'], ascending=[True, True, True]).reset_index(drop=True)
 
 
 def get_all_sites(s_file):
     """Get crosslink data into appropriate dataframe without thresholding."""
-    df_out = pd.DataFrame(columns=['chrom', 'start', 'end', 'name', 'score',
-                                   'strand', 'feature', 'attributes'])
-
+    df_out = pd.DataFrame(columns=['chrom', 'start', 'end', 'name', 'score', 'strand', 'feature', 'attributes'])
     for region in REGIONS_QUANTILE:
         df_reg = intersect_merge_info(region, s_file)
         if df_reg.empty:
@@ -372,14 +380,13 @@ def get_all_sites(s_file):
         if region == 'cds_utr_ncrna':
             df_reg.name = df_reg.attributes.map(lambda x: x.split(';')[1].split(' ')[1].strip('"'))
             df_reg['quantile'] = None
-            df_out = pd.concat([df_out, df_reg], ignore_index=True)
+            df_out = pd.concat([df_out, df_reg], ignore_index=True, sort=False)
         if region in ['intron', 'intergenic']:
             df_region = parse_region_to_df(REGIONS_MAP[region])
             df_cut = cut_sites_with_region(df_reg, df_region)
             df_filtered = df_cut[['chrom', 'start', 'end', 'name', 'score', 'strand', 'feature', 'attributes']]
-            df_out = pd.concat([df_out, df_filtered], ignore_index=True)
-    return df_out.sort_values(by=['chrom', 'start', 'strand'],
-                              ascending=[True, True, True]).reset_index(drop=True)
+            df_out = pd.concat([df_out, df_filtered], ignore_index=True, sort=False)
+    return df_out.sort_values(by=['chrom', 'start', 'strand'], ascending=[True, True, True]).reset_index(drop=True)
 
 
 def get_sequences(sites, fasta, fai, window_l, window_r, merge_overlaps=False):
@@ -510,8 +517,8 @@ def get_top_n_kmers(kmer_count, num):
 def get_clustering(kmer_pos_count, clustering_pm, smoot=6, clust=3):
     """Smoothen positional data for each kmer and then cluster kmers.
 
-    Return smooth dataframe and a dictionary of cluster with belonging
-    kmers.
+    Prior to clustering PCA is ran to reduce number of dimensions. Return smooth
+    dataframe and a dictionary of cluster with belonging kmers.
     """
     # read kmer_pos_count dictionary into a data frame
     df_in = pd.DataFrame(kmer_pos_count)
@@ -522,7 +529,11 @@ def get_clustering(kmer_pos_count, clustering_pm, smoot=6, clust=3):
     df_t = df_smooth.T
     df_cl = pd.DataFrame(clustering_pm).T
     df_cl = df_cl[df_cl.index.isin(df_t.index)]
-    kmeans = KMeans(n_clusters=clust).fit(df_cl)
+    pca = PCA(n_components=4)
+    principalComponents = pca.fit_transform(df_cl)
+    principalDf = pd.DataFrame(data = principalComponents,
+        columns = ['principal component 1', 'principal component 2', 'principal component 3', 'principal component 4'])
+    kmeans = KMeans(n_clusters=clust).fit(principalDf)
     # append lists of kmers belonging to each cluster
     df_map = pd.DataFrame()
     df_map['data_index'] = df_cl.index.values
@@ -533,83 +544,126 @@ def get_clustering(kmer_pos_count, clustering_pm, smoot=6, clust=3):
     return df_smooth, c_dict
 
 
-def get_clusters_names(c_dict, kmer_pos_count, k_length):
+def substrings(string):
+    """Return set of substrings of a string."""
+    return {string[x:y] for x, y in combinations(range(len(string) + 1), r = 2)}
+
+
+def get_all_substrings(string_list):
+    """Return set of all substring in a list of string."""
+    return {item for subset in [substrings(string) for string in string_list] for item in subset}
+
+
+def find_common_substrings(substring_set, string_list):
+    """Return set substring common to all strings in a list of strings."""
+    return {s for s in substring_set if all(s in sublist for sublist in string_list)}
+
+
+def get_longest_substrings(string_set):
+    """Return set of strings of maximal length in a set of strings."""
+    longest = len(max(string_set, key=lambda x: len(x)))
+    return {x for x in string_set if len(x) == longest}
+
+
+def get_index(substrings_set, kmer_list):
+    """Return set of indices of positions of substrings in a list of strings."""
+    return {k : [k.find(substring) for substring in substrings_set] for k in kmer_list}
+
+
+def get_matrix(index_dict):
+    """Return list of lists representing aligned sequences padded with 0s."""
+    sorted_index_dict = {k: index_dict[k] for k in sorted(index_dict, key=index_dict.get, reverse=True)}
+    first = sorted_index_dict[list(sorted_index_dict.keys())[0]][0]
+    padded = []
+    for k, v in sorted_index_dict.items():
+        k_to_list = list(k)
+        for _ in range(first - v[0]):
+            k_to_list.insert(0, '0')
+        padded.append(k_to_list)
+    longest = len(max(padded, key=lambda x: len(x)))
+    for i in padded:
+        while len(i) < longest:
+            i.append('0')
+    return padded
+
+
+def consensus(padded):
+    """Return consensus from matrix of aligned sequences."""
+    seq = {x: {'A': 0, 'C': 0, 'G': 0, 'U': 0} for x in range(len(padded))}
+    for kmer_split in padded:
+        for pos, base in enumerate(kmer_split):
+            try:
+                seq[pos][base] +=1
+            except KeyError:
+                pass
+    consensus_positions = {x: [] for x in seq.keys()}
+    for p, s in seq.items():
+        max_count = max(s.values())
+        max_count_bases = [base for base in s.keys() if s[base] == max_count]
+        consensus_positions[p].extend(max_count_bases)
+    count_per_pos = {}
+    for k, v in seq.items():
+        count_per_pos[k] = max(v.values())
+    max_count_pos = []
+    max_count_p = max(count_per_pos.values())
+    for k, v in count_per_pos.items():
+        if v == max_count_p:
+            max_count_pos.append(k)
+    seed = []
+    for p in range(max_count_pos[0], max_count_pos[-1] + 1):
+        if len(seed) <= 5:
+            seed.append(p)
+    counter = 0
+    while len(seed) < 5 and counter < 6:
+        if count_per_pos.get(seed[0] - 1, 0) > count_per_pos.get(seed[-1] + 1, 0):
+            seed.insert(0, seed[0] - 1)
+        elif count_per_pos.get(seed[0] - 1, 0) < count_per_pos.get(seed[-1] + 1, 0):
+            seed.append(seed[-1] + 1)
+        elif count_per_pos.get(seed[0] - 1, 0) == count_per_pos.get(seed[-1] + 1, 0):
+            if count_per_pos.get(seed[0] - 1, 0) >= 2:
+                seed.insert(0, seed[0] - 1)
+                seed.append(seed[-1] + 1)
+        counter += 1
+    consensus = [consensus_positions[pos] for pos in seed]
+    return consensus
+
+
+def get_clusters_name(c_dict):
     """Try to find a consensus sequence in a cluster of kmers.
 
-    When not possible returns the bases of most enriched kmer.
+    When not possible returns the bases of most enriched kmer. In case of
+    duplicate names '_1' is appended to each duplicate.
     """
     c_con_dict = {}
     for cluster_id, kmers_list in c_dict.items():
         if len(kmers_list) == 1:
-            # if there is only one kmer in a cluster than cluster name is kmer
+        # if there is only one kmer in a cluster than cluster name is kmer
             c_con_dict[cluster_id] = kmers_list[0]
         elif len(kmers_list) > 1:
-            # find max enrichment for eack kmer in cluster
-            max_enr = {k: max(v.values()) for k, v in kmer_pos_count.items() if k in kmers_list}
-            # find most enriched kmer (top kmer)
-            k_enr = max(max_enr, key=max_enr.get)
-            # find most enriched position
-            max_pos = {k: max(v, key=v.get) for k, v in kmer_pos_count.items() if k in kmers_list}
-            enr_pos = max_pos[k_enr]
-            # find kmers with peaks within k_length from top kmer's peak
-            neighbour_kmers = {}
-            for key, value in max_pos.items():
-                if abs(enr_pos - value) <= k_length:
-                    neighbour_kmers[key] = value
-            # if no other peaks are near then cluster name is top kmer's name
-            if len(neighbour_kmers) == 1:
-                c_con_dict[cluster_id] = k_enr
-            # if more then one peak is around max enrichment peak "consensus"
-            # is calculated
+            all_substrings = get_all_substrings(kmers_list)
+            common_substrings = find_common_substrings(all_substrings, kmers_list)
+            if not common_substrings:
+                c_con_dict[cluster_id] = kmers_list[0]
             else:
-                pos_base = []
-                positions = []
-                # append tuples (position, kmer enrichment, base), one for each
-                # base in each kmer
-                for key, value in neighbour_kmers.items():
-                    count = 0
-                    for base in key:
-                        position = value + count
-                        tup = (position, max_enr[key], base)
-                        pos_base.append(tup)
-                        positions.append(position)
-                        count += 1
-                # sorting will first order them by position but when several
-                # bases occupy same position the last one will have the highest
-                # enrichment
-                pos_base.sort()
-                positions.sort()
-                pwm = {p: {'A': 0, 'C': 0, 'G': 0, 'U': 0} for p in set(positions)}
-                # count bases at each position
-                for tup in pos_base:
-                    pwm[tup[0]][tup[2]] += 1
-                # prepare dictionary with empty list at each position
-                consensus_positions = {x: [] for x in pwm.keys()}
-                # populate those list with all bases that have count equal to max count (one or more)
-                for key, base_count in pwm.items():
-                    max_count = max(base_count.values())
-                    max_count_bases = [base for base in base_count.keys() if base_count[base] == max_count]
-                    consensus_positions[key].extend(max_count_bases)
-                # Build consensus obeying following rules: while consensus is shorter than the length of analysed
-                # motifs and there is only one base with maxcount a that position add this base, if there are
-                # several bases put all of them enclosed in [].
-                # when lenght of consensus is equal or larger then the length of analysed motifs then rules for adding
-                # bases are stricter, only if there is single base at max count value and that base has count
-                # of more than 1 (i.e. if more the one motif distributions "agree" about that position) the base
-                # will get added.
-                consensus_list = []
-                for pos, base in consensus_positions.items():
-                    if len(consensus_list) < k_length:
-                        if len(base) == 1:
-                            consensus_list.append(base[0])
-                        elif len(base) > 1:
-                            consensus_list.append(f'[{"".join(base)}]')
-                    elif len(consensus_list) >= k_length:
-                        if (len(base) == 1) and (pwm[pos][base[0]] > 1):
-                            consensus_list.append(base[0])
-                        else:
-                            break
-                c_con_dict[cluster_id] = ''.join(consensus_list)
+                longest_subtring = get_longest_substrings(common_substrings)
+                long_subs_index = get_index(longest_subtring, kmers_list)
+                aligned_matrix = get_matrix(long_subs_index)
+                consensus_list = consensus(aligned_matrix)
+                final_list = []
+                for base in consensus_list:
+                    if len(base) == 1:
+                        final_list.append(base[0])
+                    elif len(base) > 1:
+                        final_list.append(f'[{"".join(base)}]')
+                final_str = ''.join(final_list)
+                if final_list and (final_str not in c_con_dict.values()):
+                    c_con_dict[cluster_id] = final_str
+                elif final_list and (final_str in c_con_dict.values()):
+                    while (final_str in c_con_dict.values()):
+                        final_str += ('_1')
+                    c_con_dict[cluster_id] = final_str
+                elif not final_list:
+                    c_con_dict[cluster_id] = kmers_list[0]
     return c_con_dict
 
 
@@ -689,6 +743,7 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
     - smoothing: window used for smoothing kmer positional distribution curves
     - all_outputs: controls the amount of outputs produced in the analysis
     """
+    start = time.time()
     sample_name = get_name(sites_file)
     global TEMP_PATH
     TEMP_PATH = './TEMP{}/'.format(randint(10 ** 6, 10 ** 7))
@@ -697,20 +752,14 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
     get_regions_map(regions_file)
     global REGIONS_MAP
     REGIONS_MAP = {
-        'genome': None,
-        'whole_gene': '{}whole_gene_region.bed'.format(TEMP_PATH),
-        'whole_gene_reference': '{}whole_gene_reference.bed'.format(TEMP_PATH),
         'intron': '{}intron_regions.bed'.format(TEMP_PATH),
-        'UTR3': '{}utr3_regions.bed'.format(TEMP_PATH),
-        'UTR5': '{}utr5_regions.bed'.format(TEMP_PATH),
-        'other_exon': '{}other_exon_regions.bed'.format(TEMP_PATH),
-        'ncRNA': '{}ncRNA_regions.bed'.format(TEMP_PATH),
         'intergenic': '{}intergenic_regions.bed'.format(TEMP_PATH),
         'cds_utr_ncrna': '{}cds_utr_ncrna_regions.bed'.format(TEMP_PATH)
     }
 
-    print('getting thresholded crosslinks')
+    print('Getting thresholded crosslinks')
     df_txn = get_threshold_sites(sites_file, percentile=percentile)
+    print(f'Thresholding runtime: {((time.time() - start) / 60):.2f} min')
     print(f'{len(df_txn)} thresholded crosslinks')
     if df_txn is None:
         print("Not able to find any thresholded sites.")
@@ -721,12 +770,18 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
     with open(genome_chr_sizes, 'w') as file:
         file.write(make_genome_sz)
     df_txn = remove_chr(df_txn, '{}genome.sizes'.format(TEMP_PATH))
+    checkpoint1 = time.time()
     df_xn = get_all_sites(sites_file)
-
+    print(f'{len(df_xn)} total sites')
+    print(f'All sites taging runtime: {((time.time() - checkpoint1) / 60):.2f} min')
+    
     for region in regions:
+        region_start = time.time()
         # Parse sites file and keep only parts that intersect with given region
         df_sites = df_txn.loc[df_txn['feature'].isin(REGION_SITES[region])]
+        print(f'{len(df_sites)} thresholded sites on {region}')
         df_xn_region = df_xn.loc[df_xn['feature'].isin(REGION_SITES[region])]
+        print(f'{len(df_xn_region)} all sites on {region}')
         sites = pbt.BedTool.from_dataframe(
             df_sites[['chrom', 'start', 'end', 'name', 'score', 'strand']])
         if all_outputs:
@@ -736,15 +791,17 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
             print(f'less then 100 thresholded crosslink in {region}')
             continue
 
-        all_sites = pbt.BedTool.from_dataframe(df_xn[['chrom', 'start', 'end', 'name', 'score', 'strand']])
+        all_sites = pbt.BedTool.from_dataframe(df_xn_region[['chrom', 'start', 'end', 'name', 'score', 'strand']])
         # finds all crosslink sites that are not in peaks as reference for
         # normalization
         complement = get_complement(peak_file, '{}genome.sizes'.format(TEMP_PATH))
-        if region == 'whole_gene':
-            complement = intersect(REGIONS_MAP['whole_gene_reference'], complement)
+        # if region == 'whole_gene':
+        #     complement = intersect(REGIONS_MAP['whole_gene_reference'], complement)
         reference = intersect(complement, all_sites)
         noxn = len(reference)
+        print(f'noxn {noxn} on {region}')
         ntxn = len(sites)
+        print(f'ntxn {ntxn} on {region}')
         if all_outputs:
             reference.saveas(f'./results/{sample_name}_oxn_{region}.bed')
         # get sequences around all crosslinks not in peaks
@@ -753,8 +810,10 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
         )
         # get sequences around all thresholded crosslinks
         sequences = get_sequences(sites, genome, genome_fai, window_distal + kmer_length, window_distal + kmer_length)
+        get_sequences_cp = time.time()
         # get positional counts for all kmers around thresholded crosslinks
         kmer_pos_count_T = pos_count_kmer(sequences, kmer_length, window_distal)
+        print(f'Kmer positional counting runtime: {((time.time() - get_sequences_cp) / 60):.2f} min')
         kmer_pos_count = {key.replace('T', 'U'): value for key, value in kmer_pos_count_T.items()}
         # get position where the kmer count is maximal
         max_p = get_max_pos(kmer_pos_count, window_peak_l=15, window_peak_r=15)
@@ -776,8 +835,10 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
                     rtxn[motif][pos] = count / avg_distal_occ[motif]
                 except ZeroDivisionError:
                     rtxn[motif][pos] = count
+        rtxn_cp = time.time()
         # get positional counts for all kmers around all crosslink not in peaks
         ref_pc_T = pos_count_kmer(reference_sequences, kmer_length, window)
+        print(f'Reference positional counts runtime: {((time.time() - rtxn_cp) / 60):.2f} min')
         ref_pc = {key.replace('T', 'U'): value for key, value in ref_pc_T.items()}
         # occurences of kmers on each position around all crosslinks not in
         # peaks (reference) relative to distal occurences
@@ -794,7 +855,8 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
         prtxn = {x: [] for x in rtxn}
         window_inner = int(window / 3)
         min_relativ_occurence_inner = 1 + ((min_relativ_occurence - 1) / 2)
-        relevant_pos_inner = list(range(-window_inner + int((kmer_length + 1) / 2), window_inner + 1 + int((kmer_length + 1) / 2)))
+        relevant_pos_inner = list(range(-window_inner + int((kmer_length + 1) / 2),
+            window_inner + 1 + int((kmer_length + 1) / 2)))
         relevant_pos_outer = list(range(-window + int((kmer_length + 1) / 2), window + 1 + int((kmer_length + 1) / 2)))
         for i in relevant_pos_outer:
             if i in relevant_pos_inner:
@@ -813,9 +875,9 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
         prtxn_concat = {}
         for key, value in prtxn.items():
             prtxn_concat[key] = ', '.join([str(i) for i in value])
-
         df_prtxn = pd.DataFrame.from_dict(prtxn_concat, orient='index', columns=['prtxn'])
         df_out = pd.merge(df_out, df_prtxn, left_index=True, right_index=True)
+        prtxn_cp = time.time()
         # for z-score calculation random samples from crosslink out of peaks
         # (reference) are used and for each sample we calculate average relative
         # occurences for each kmer on relevant positions and add them to a list
@@ -834,6 +896,7 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
                         roxn_sample[motif][pos] = count
             aroxn_sample = {x: np.mean([roxn_sample[x][y] for y in prtxn[x]]) for x in roxn_sample}
             random_aroxn.append(aroxn_sample)
+        print(f'Analysing random samples runtime: {((time.time() - prtxn_cp) / 60):.2f} min')
         # calculate average relative occurences for each kmer around thresholded
         # crosslinks across relevant positions and add it to outfile table
         artxn = {x: np.mean([rtxn[x][y] for y in prtxn[x]]) for x in rtxn}
@@ -866,17 +929,17 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
         for key, value in combined_aroxn.items():
             random_avg[key] = np.mean(value)
             random_std[key] = np.std(value)
-
         z_score = {}
-        not_in_artxn = []
+        #not_in_artxn = []
         for key, value in random_avg.items():
             try:
                 z_score[key] = (artxn[key] - value) / random_std[key]
             except KeyError:
+                print(f'{key} missing from artxn')
                 # some kmers will eventualy not pass minimal relative occurence
                 # threshold therefor will be missing
-                not_in_artxn.append(key)
-        print(f'{len(not_in_artxn)} motifs missing from artxn')
+                #not_in_artxn.append(key)
+        #print(f'{len(not_in_artxn)} motifs missing from artxn')
         df_z_score = pd.DataFrame.from_dict(z_score, orient='index', columns=['z-score'])
         df_out = pd.merge(df_out, df_z_score, left_index=True, right_index=True, how='outer')
         # using z-score we can also calculate p-values for each motif which are
@@ -897,19 +960,18 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
         for motif, pos_m in kmer_pos_count.items():
             for pos, count in pos_m.items():
                 kmer_occ_per_txl[motif][pos] = count * 100 / ntxn
-
         df_kmer_occ_per_txl = pd.DataFrame.from_dict(kmer_occ_per_txl, orient='index')
         exported_columns = [i for i in range(-48, 51)]
         df_kmer_occ_per_txl = df_kmer_occ_per_txl[exported_columns]
         df_out = pd.merge(df_out, df_kmer_occ_per_txl, left_index=True, right_index=True, how='outer')
         df_out.to_csv(f'./results/{sample_name}_{kmer_length}mer_{region}.tsv', sep='\t')
-        kmer_occ_per_txl_norm = {x: {} for x in kmer_occ_per_txl}
+        kmer_occ_per_txl_ln = {x: {} for x in kmer_occ_per_txl}
         for motif, pos_m in kmer_occ_per_txl.items():
-            sum_pos_m = sum(pos_m.values())
             for pos, count in pos_m.items():
-                kmer_occ_per_txl_norm[motif][pos] = count / sum_pos_m
+                if pos in range(-48, 51):
+                    kmer_occ_per_txl_ln[motif][pos] = np.log(count + 1)
         plot_selection = {kmer: values for kmer, values in kmer_occ_per_txl.items() if kmer in top_kmers}
-        df_smooth, clusters_dict = get_clustering(plot_selection, kmer_occ_per_txl_norm, smoothing, clusters)
+        df_smooth, clusters_dict = get_clustering(plot_selection, kmer_occ_per_txl_ln, smoothing, clusters)
         # for meta analysis clusters are also output in a file
         with open('./results/{}_clusters.csv'.format(sample_name), 'w', newline='') as file:
             writer = csv.writer(file, lineterminator='\n')
@@ -926,13 +988,17 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
         clusters_rank = {
             key: rank for rank, key in enumerate(sorted(clusters_max, key=clusters_max.get, reverse=True), 1)}
         # using positions and occurences each cluster gets a name
-        cluster_rename = get_clusters_names(clusters_dict, kmer_pos_count, kmer_length)
+        cluster_rename = get_clusters_name(clusters_dict)
         df_cluster_sum.rename(columns=cluster_rename).to_csv('./results/' + sum_name, sep='\t')
         # finnaly plot all the clusters and the wider window (-150 to 100) plot
         # with average occurences
         plot_positional_distribution(
             df_smooth, df_cluster_sum, clusters_dict, clusters_rank, sample_name, cluster_rename, region)
-
+        plot_cp = time.time()
+        print(f'Analysing {region} runtime: {((plot_cp - region_start) / 60):.2f}')
+        print(f'Analysing {region} in seconds per thresholded_crosslink: {(plot_cp - region_start) / ntxn}')
     # cleanup temporary files
     shutil.rmtree(TEMP_PATH)
     pbt.cleanup()
+    print(f'Analysis total runtime {((time.time() - start) / 60):.2f}')
+
