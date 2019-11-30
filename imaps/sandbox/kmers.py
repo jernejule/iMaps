@@ -154,12 +154,16 @@ def parse_region_to_df(region_file):
 
 
 def filter_cds_utr_ncrna(df_in):
+    """Filter regions CDS, UTR5, UTR3 and ncRNA by size and trim"""
     utr5 = df_in.region == 'UTR5'
     cds = df_in.region == 'CDS'
     utr3 = df_in.region == 'UTR3'
     ncrna = df_in.region == 'ncRNA'
-    size = df_in.end - df_in.start >= 100
-    df_out = df_in[(utr5 & size) | (cds & size) | (utr3 & size) | ncrna].copy()
+longer = df_in.end - df_in.start >= 300
+    short = df_in.end - df_in.start >= 100
+    df_out = df_in[(utr5 & longer) | (cds & short) | (utr3 & longer) | ncrna].copy()
+    df_out.loc[df_out['region'] == 'UTR3', ['start']] = df_out.start + 30
+    df_out.loc[df_out['region'] == 'UTR5', ['end']] = df_out.end - 30
     df_out.loc[df_out['region'] == 'CDS', ['start']] = df_out.start + 30
     df_out.loc[df_out['region'] == 'CDS', ['end']] = df_out.end - 30
     return df_out
@@ -556,36 +560,40 @@ def find_common_substrings(substring_set, string_list):
 
 
 def get_longest_substrings(string_set):
-    """Return set of strings of maximal length in a set of strings."""
+    """Return list of strings of maximal length in a set of strings."""
     longest = len(max(string_set, key=lambda x: len(x)))
-    return {x for x in string_set if len(x) == longest}
+    return [x for x in string_set if len(x) == longest]
 
 
-def get_index(substrings_set, kmer_list):
+def get_index(substring, kmer_list):
     """Return set of indices of positions of substrings in a list of strings."""
-    return {k : [k.find(substring) for substring in substrings_set] for k in kmer_list}
+    return {k : k.find(substring) for k in kmer_list} # TODO
 
 
-def get_matrix(index_dict):
-    """Return list of lists representing aligned sequences padded with 0s."""
-    sorted_index_dict = {k: index_dict[k] for k in sorted(index_dict, key=index_dict.get, reverse=True)}
-    first = sorted_index_dict[list(sorted_index_dict.keys())[0]][0]
-    padded = []
-    for k, v in sorted_index_dict.items():
-        k_to_list = list(k)
-        for _ in range(first - v[0]):
-            k_to_list.insert(0, '0')
-        padded.append(k_to_list)
-    longest = len(max(padded, key=lambda x: len(x)))
-    for i in padded:
-        while len(i) < longest:
-            i.append('0')
-    return padded
+def get_matrices(longest_substring, kmer_list):
+    matrix = {}
+    for i, substring in enumerate(longest_substring):
+        long_sub_index = get_index(substring, kmer_list)
+        sorted_index_dict = {k: long_sub_index[k] for k in sorted(long_sub_index, key=long_sub_index.get, reverse=True)}
+        first = sorted_index_dict[list(sorted_index_dict.keys())[0]]
+        padded = []
+        for k, v in sorted_index_dict.items():
+            k_to_list = list(k)
+            for _ in range(first - v):
+                k_to_list.insert(0, '0')
+            padded.append(k_to_list)
+        longest = len(max(padded, key=lambda x: len(x)))
+        for i in padded:
+            while len(i) < longest:
+                i.append('0')
+        matrix[substring] = padded
+    return matrix
 
 
-def consensus(padded):
+
+def get_consensus(padded):
     """Return consensus from matrix of aligned sequences."""
-    seq = {x: {'A': 0, 'C': 0, 'G': 0, 'U': 0} for x in range(len(padded))}
+    seq = {x: {'A': 0, 'C': 0, 'G': 0, 'U': 0} for x in range(len(padded[0]))}
     for kmer_split in padded:
         for pos, base in enumerate(kmer_split):
             try:
@@ -624,6 +632,56 @@ def consensus(padded):
     return consensus
 
 
+def chose_best_consensus(consensuses, kmer_list):
+    """Return best consensus found in the list of consensuses"""
+    if len(consensuses) == 1:
+        return consensuses[0]
+    else:
+        score_dict = {}
+        for i, consensus in enumerate(consensuses):
+            score = 0
+            for combo in product(*consensus):
+                for kmer in kmer_list:
+                    if ''.join(combo) in kmer:
+                        score += 1
+            score_dict[i] = score
+        #print(score_dict)
+        max_score = max(score_dict.values())
+        top_scored = [consensuses[k] for k, v in score_dict.items() if v == max_score]
+        if len(top_scored) == 1:
+            return top_scored[0]
+        else:
+            for kmer in kmer_list:
+                #print(kmer)
+                for cons in top_scored:
+                    #print(cons, kmer)
+                    cons_flat = [i[0] for i in cons]
+                    print("".join(cons_flat))
+                    if ''.join(cons_flat) in kmer:
+                        return cons
+                    cons_minus1start = cons[1:]
+                    cons_minus1start_flat = [i[0] for i in cons_minus1start]
+                    if ''.join(cons_minus1start_flat) in kmer:
+                        return cons_minus1start
+                    cons_minus1end = cons[:-1]
+                    cons_minus1end_flat = [i[0] for i in cons_minus1end]
+                    if ''.join(cons_minus1end_flat) in kmer:
+                        return cons_minus1end
+                    cons_minus1startend = cons[1:-1]
+                    cons_minus1startend_flat = [i[0] for i in cons_minus1startend]
+                    if ''.join(cons_minus1startend_flat) in kmer:
+                        return cons_minus1startend
+                    cons_minus2start = cons[2:]
+                    cons_minus2start_flat = [i[0] for i in cons_minus2start]
+                    if ''.join(cons_minus2start_flat) in kmer:
+                        return cons_minus2start
+                    cons_minus2end = cons[:-2]
+                    cons_minus2end_flat = [i[0] for i in cons_minus2end]
+                    if ''.join(cons_minus2end_flat) in kmer:
+                        return cons_minus2end
+                    return kmer_list[0]
+
+
 def get_clusters_name(c_dict):
     """Try to find a consensus sequence in a cluster of kmers.
 
@@ -642,10 +700,12 @@ def get_clusters_name(c_dict):
                 c_con_dict[cluster_id] = kmers_list[0]
             else:
                 longest_subtring = get_longest_substrings(common_substrings)
-                long_subs_index = get_index(longest_subtring, kmers_list)
-                aligned_matrix = get_matrix(long_subs_index)
-                consensus_list = consensus(aligned_matrix)
-                final_list = []
+                matrices = get_matrices(longest_subtring, kmers_list)
+                consensuses = []
+                for matrix in matrices.values():
+                    consensuses.append(get_consensus(matrix))
+                consensus_list = chose_best_consensus(consensuses, kmers_list)
+                final_list = []                
                 for base in consensus_list:
                     if len(base) == 1:
                         final_list.append(base[0])
@@ -726,7 +786,7 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
     - genome_fai: FASTA index file
     - regions_file: custom genome segmentation file
     - window: region around (thresholded) crosslinks where positional
-      distributions are obtained by counting kmers per position (default 60)
+      distributions are obtained by counting kmers per position (default 40)
     - window_distal: region considered for background distribution (default 150)
     - kmer_length: length (in nucleotides) of kmers to be analysed (default 4,
       with option between 3 and 7)
@@ -737,6 +797,7 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
       crosslinks to distal occurrences (default 2)
     - clusters: number of clusters of kmers(default 5)
     - smoothing: window used for smoothing kmer positional distribution curves
+    (default 6)
     - all_outputs: controls the amount of outputs produced in the analysis
     """
     start = time.time()
@@ -962,7 +1023,8 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
             for pos, count in pos_m.items():
                 if pos in range(-48, 51):
                     kmer_occ_per_txl_ln[motif][pos] = np.log(count + 1)
-        plot_selection = {kmer: values for kmer, values in kmer_occ_per_txl.items() if kmer in top_kmers}
+        plot_selection_unsorted = {kmer: values for kmer, values in kmer_occ_per_txl.items() if kmer in top_kmers}
+        plot_selection = {k : plot_selection_unsorted[k] for k in top_kmers}
         df_smooth, clusters_dict = get_clustering(plot_selection, kmer_occ_per_txl_ln, smoothing, clusters)
         # for meta analysis clusters are also output in a file
         with open('./results/{}_clusters.csv'.format(sample_name), 'w', newline='') as file:
