@@ -154,16 +154,12 @@ def parse_region_to_df(region_file):
 
 
 def filter_cds_utr_ncrna(df_in):
-    """Filter regions CDS, UTR5, UTR3 and ncRNA by size and trim"""
     utr5 = df_in.region == 'UTR5'
     cds = df_in.region == 'CDS'
     utr3 = df_in.region == 'UTR3'
     ncrna = df_in.region == 'ncRNA'
-    longer = df_in.end - df_in.start >= 300
-    short = df_in.end - df_in.start >= 100
-    df_out = df_in[(utr5 & longer) | (cds & short) | (utr3 & longer) | ncrna].copy()
-    df_out.loc[df_out['region'] == 'UTR3', ['start']] = df_out.start + 30
-    df_out.loc[df_out['region'] == 'UTR5', ['end']] = df_out.end - 30
+    size = df_in.end - df_in.start >= 100
+    df_out = df_in[(utr5 & size) | (cds & size) | (utr3 & size) | ncrna].copy()
     df_out.loc[df_out['region'] == 'CDS', ['start']] = df_out.start + 30
     df_out.loc[df_out['region'] == 'CDS', ['end']] = df_out.end - 30
     return df_out
@@ -190,7 +186,7 @@ def get_regions_map(regions_file):
     df_cds_utr_ncrna = df_regions.loc[df_regions['region'].isin(['CDS', 'UTR3', 'UTR5', 'ncRNA'])]
     df_intron = df_regions.loc[df_regions['region'] == 'intron']
     df_cds_utr_ncrna = filter_cds_utr_ncrna(df_cds_utr_ncrna)
-    df_intron = filter_intron(df_intron, 300)
+    df_intron = filter_intron(df_intron, 100)
     to_csv_kwrgs = {'sep': '\t', 'header': None, 'index': None}
     df_intron.to_csv('{}intron_regions.bed'.format(TEMP_PATH), **to_csv_kwrgs)
     df_intergenic.to_csv('{}intergenic_regions.bed'.format(TEMP_PATH), **to_csv_kwrgs)
@@ -854,22 +850,18 @@ def run(peak_file, sites_file, genome, genome_fai, regions_file, window, window_
         # relative occurence), default 2
         prtxn = {x: [] for x in rtxn}
         window_inner = int(window / 3)
-        min_relativ_occurence_inner = 1 + ((min_relativ_occurence - 1) / 2)
         relevant_pos_inner = list(range(-window_inner + int((kmer_length + 1) / 2),
             window_inner + 1 + int((kmer_length + 1) / 2)))
         relevant_pos_outer = list(range(-window + int((kmer_length + 1) / 2), window + 1 + int((kmer_length + 1) / 2)))
         for i in relevant_pos_outer:
             if i in relevant_pos_inner:
                 for m, pm in rtxn.items():
-                    if pm[i] > min_relativ_occurence_inner:
-                        prtxn[m].append(i)
+                    prtxn[m].append(i)
             else:
                 for m, pm in rtxn.items():
                     if pm[i] > min_relativ_occurence:
                         prtxn[m].append(i)
-        for motif, rp in prtxn.items():
-            if not rp:
-                rp.extend([-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5])
+
         # prepare relevant positions obtained from previous step for output
         # table and add it to the output table
         prtxn_concat = {}
