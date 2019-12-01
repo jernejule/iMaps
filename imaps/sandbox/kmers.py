@@ -711,7 +711,7 @@ def get_clusters_name(c_dict):
                         final_list.append(base[0])
                     elif len(base) > 1:
                         final_list.append(f'[{"".join(base)}]')
-                final_str = ''.join(final_list)
+                final_str = ''.join(final_list).replace('ACGT', 'N')
                 if final_list and (final_str not in c_con_dict.values()):
                     c_con_dict[cluster_id] = final_str
                 elif final_list and (final_str in c_con_dict.values()):
