@@ -4,4 +4,11 @@
 Welcome to imaps's documentation!
 =================================
 
-TODO.
+Contents
+========
+
+.. toctree::
+   :maxdepth: 1
+
+   CHANGELOG
+   contributing
