@@ -535,6 +535,18 @@ def get_top_n_kmers(kmer_count, num):
     return [item[0] for item in sorted(kmer_count.items(), key=lambda x: x[1], reverse=True)[:num]]
 
 
+def most_frequent(lst):
+    """Finds the most frequent prtxn."""
+    dict_counts = {}
+    lst = [x for x in lst if str(x)!='nan']
+    el_count = 0
+    for el in list(set(lst)):
+        if lst.count(el) > el_count:
+            el_count = lst.count(el)
+            element = el
+    return element
+
+
 @ignore_warnings(category=ConvergenceWarning)
 def get_clustering(kmer_pos_count, x1, x2, kmer_length, window, smoot, n_clusters):
     """Smoothen positional data for each kmer and then cluster kmers.
@@ -861,6 +873,7 @@ def run(
     regions=None,
     subsample=True,
     repeats="masked",
+    narrow_peak=False
 ):
     """Start the analysis.
 
@@ -884,6 +897,7 @@ def run(
     - smoothing: window used for smoothing kmer positional distribution curves
     (default 6)
     - all_outputs: controls the amount of outputs produced in the analysis
+    - narrow_peak: other peak file with which the tXn are intersected
     """
     start = time.time()
     if regions is None:
@@ -923,6 +937,13 @@ def run(
         print(f"{len(df_sites)} thresholded sites on {region}")
         df_xn_region = df_xn.loc[df_xn["feature"].isin(REGION_SITES[region])]
         print(f"{len(df_xn_region)} all sites on {region}")
+        sites = pbt.BedTool.from_dataframe(df_sites[["chrom", "start", "end", "name", "score", "strand"]])
+        # Intersect tXn with peak_file or narrowpeaks and change back to df for subsampling
+        if narrow_peak:
+            narrow_sites1 = intersect(narrow_peak, sites)
+        else:
+            narrow_sites1 = intersect(peak_file, sites)
+        df_sites = narrow_sites1.to_dataframe(names=["chrom", "start", "end", "name", "score", "strand"], dtype={"chrom": str, "start": int, "end": int, "name": str, "score": float, "strand": str},)
         # subsample in order to keer RAM and time complexity reasonable
         if subsample:
             df_sites = subsample_region(df_sites, region, 1000000)
@@ -1044,13 +1065,22 @@ def run(
                         continue
         threshold = {pos: np.percentile(values, prtxn_conf, axis=0) for pos, values in temp_combined_roxn.items()}
         prtxn = {x: [] for x in rtxn}
+        all_prtxns = []
         for kmer, posm in rtxn.items():
             for pos, val in posm.items():
                 try:
                     if abs(pos) < window and val >= threshold[pos]:
                         prtxn[kmer].append(pos)
+                        all_prtxns.append(pos)
                 except KeyError:
                     pass
+        #Find the most common prtxn position.
+        prtxn_most_common = most_frequent(all_prtxns)
+        #Assign the most common prtxn to kmers with empty prtxn list
+        for i, val in prtxn.items():
+            if len(val) == 0:
+                val.append(prtxn_most_common)
+
         random_aroxn = []
         for roxn_sample in random_roxn:
             aroxn_sample = {
@@ -1120,7 +1150,17 @@ def run(
         df_kmer_occ_per_txl = pd.DataFrame.from_dict(kmer_occ_per_txl, orient="index")
         exported_columns = [i for i in range(-48, 51)]
         df_kmer_occ_per_txl = df_kmer_occ_per_txl[exported_columns]
+        # Save average distal occurrence (DtXn) and ntxn into tsv file.
+        df_distal = pd.DataFrame.from_dict(avg_distal_occ, orient='index', columns=["DtXn"])
+        df_out = pd.merge(df_out, df_distal, left_index=True, right_index=True, how="outer")
         df_out = pd.merge(df_out, df_kmer_occ_per_txl, left_index=True, right_index=True, how="outer")
+        df_out["ntxn"] = ntxn
+        # Save additional tsv file with rtxn values (can potentially be used for heatmaps)
+        df_rtxn = pd.DataFrame.from_dict(rtxn, orient="index")
+        df_rtxn = df_rtxn[exported_columns]
+        df_rtxn.to_csv(
+            f"./results/{sample_name}_{kmer_length}mer_rtxn_{region}.tsv", sep="\t", float_format="%.8f"
+        )
         df_out.to_csv(
             f"./results/{sample_name}_{kmer_length}mer_distribution_{region}.tsv", sep="\t", float_format="%.8f"
         )
