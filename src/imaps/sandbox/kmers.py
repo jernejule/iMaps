@@ -891,8 +891,6 @@ def run(
     - top_n: number of kmers ranked by z-score in descending order for
       clustering and plotting (default 20)
     - percentile: used for thresholding crosslinks (default 0.7)
-    - min_relative_occurence: ratio of kmer distribution around (thresholded)
-      crosslinks to distal occurrences (default 2)
     - clusters: number of clusters of kmers(default 5)
     - smoothing: window used for smoothing kmer positional distribution curves
     (default 6)
@@ -1142,7 +1140,6 @@ def run(
         top_kmers = kmers_order_of_enrichment[:top_n]
         # normalize kmer occurences by number of thresholded crosslinks for
         # easier comparison across different samples
-        ntxn = len(sites)
         kmer_occ_per_txl = {x: {} for x in kmer_pos_count}
         for motif, pos_m in kmer_pos_count.items():
             for pos, count in pos_m.items():
