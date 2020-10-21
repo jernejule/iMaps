@@ -535,18 +535,6 @@ def get_top_n_kmers(kmer_count, num):
     return [item[0] for item in sorted(kmer_count.items(), key=lambda x: x[1], reverse=True)[:num]]
 
 
-def most_frequent(lst):
-    """Finds the most frequent prtxn."""
-    dict_counts = {}
-    lst = [x for x in lst if str(x)!='nan']
-    el_count = 0
-    for el in list(set(lst)):
-        if lst.count(el) > el_count:
-            el_count = lst.count(el)
-            element = el
-    return element
-
-
 @ignore_warnings(category=ConvergenceWarning)
 def get_clustering(kmer_pos_count, x1, x2, kmer_length, window, smoot, n_clusters):
     """Smoothen positional data for each kmer and then cluster kmers.
@@ -1072,12 +1060,10 @@ def run(
                         all_prtxns.append(pos)
                 except KeyError:
                     pass
-        #Find the most common prtxn position.
-        prtxn_most_common = most_frequent(all_prtxns)
-        #Assign the most common prtxn to kmers with empty prtxn list
+        #Assign the max_p to kmers with empty prtxn list
         for i, val in prtxn.items():
             if len(val) == 0:
-                val.append(prtxn_most_common)
+                val.append(max_p[i])
 
         random_aroxn = []
         for roxn_sample in random_roxn:
