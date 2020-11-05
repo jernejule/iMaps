@@ -68,6 +68,8 @@ from itertools import combinations, product
 from random import randint
 
 import matplotlib.pyplot as plt
+import matplotlib.colors as colors
+from matplotlib import cm
 import numpy as np
 import pandas as pd
 import pybedtools as pbt
@@ -800,24 +802,33 @@ def get_cluster_wide_sum(topkmer_pos_count, c_dict):
     return pd.concat(clusters, axis=1).rolling(5, center=True).mean().dropna()
 
 
+def truncate_colormap(cmap, minval=0.0, maxval=1.0, n=100):
+    """Creates a new colormap from a part of given colormap."""
+    new_cmap = colors.LinearSegmentedColormap.from_list(
+        f'trunc({cmap.name},{minval:.2f},{maxval:.2f})',
+        cmap(np.linspace(minval, maxval, n)))
+    return new_cmap
+
+
 def plot_positional_distribution(df_in, df_sum, c_dict, c_rank, name, cluster_rename, region, kmer_length):
     """Plot each cluster on its own plot.
 
     Also, plot combining the averages of clusters over a larger window.
     """
+    sequential_palettes = ['Purples', 'Blues', 'Greens', 'Oranges', 'Reds', 'Greys', 'PuRd', 'BuPu','GnBu', 'YlGn']
+    sm_plt_colors = []
     c_num = len(c_dict)
     num_rows = int(np.ceil((c_num + 1) / 2)) if c_num > 1 else 2
     sns.set(rc={"figure.figsize": (24, num_rows * 7)})
-    fig, axs = plt.subplots(nrows=num_rows, ncols=2)
-    plt.subplots_adjust(left=None, bottom=None, right=None, top=None, wspace=None, hspace=0.3)
+    fig = plt.figure(constrained_layout=True)
+    gs = fig.add_gridspec(nrows=num_rows, ncols=2)
     fig.suptitle(f"{name}_{region}", fontsize=20)
     lineplot_kwrgs = {
-        "palette": "tab10",
-        "linewidth": 1,
+        "linewidth": 2,
         "dashes": False,
     }
-    xlabel = "Positions of kmer start relative to crosslinks"
-    ylabel = "Kmer occurence per thresholded crosslinks (%)"
+    xlabel = "Positions of K-mer center relative to crosslinks"
+    ylabel = "K-mer occurence per thresholded crosslink (%)"
     rank_c = {y: x for x, y in c_rank.items()}
     rank_ordered = OrderedDict(sorted(rank_c.items()))
     # plot clusters in order starting from cluster with highest average max
@@ -826,21 +837,37 @@ def plot_positional_distribution(df_in, df_sum, c_dict, c_rank, name, cluster_re
         # define position of subplot
         axs_x = (rank - 1) // 2
         axs_y = (rank - 1) % 2
+        # Create a palette to be used in plot
+        if c_num <= 10:
+            cmap = plt.get_cmap(sequential_palettes[rank-1])
+            new_cmap = truncate_colormap(cmap, 0.2, 1)
+            cm.register_cmap(f"dark_{sequential_palettes[rank-1]}", new_cmap)
+            new_palette = sns.color_palette(f"dark_{sequential_palettes[rank-1]}", n_colors=len(c_dict[cluster]))
+            # Add representative cluster color to list for the last plot
+            sm_plt_colors.append(new_palette[int(len(new_palette)/2)])
+        else:
+            new_palette = 'tab10'
+            sm_plt_colors = 'tab10'
         # change name to consensus sequence
-        c_name = cluster_rename[cluster]
-        axs[axs_x, axs_y].set(xlabel=xlabel, ylabel=ylabel, title="Cluster of kmers {}".format(c_name))
+        c_name = f'{cluster_rename[cluster]}'
+        # create subplot for given cluster
+        with sns.axes_style("darkgrid"):
+            ax = fig.add_subplot(gs[axs_x, axs_y])
+        ax.set(xlabel=xlabel, ylabel=ylabel)
+        ax.set_title(f"Cluster of K-mers {c_name}", weight='bold')
         df_plot = df_in[c_dict[cluster]]
         df_plot = df_plot[df_plot.index.isin(range(-50, 51))]
-        sns.lineplot(data=df_plot, ax=axs[axs_x, axs_y], ci=None, **lineplot_kwrgs)
+        sns.lineplot(data=df_plot, ax=ax, ci=None, palette=new_palette, **lineplot_kwrgs)
     # final plot of summed clusters in a wider window
     df_ordered = df_sum[list(rank_ordered.values())].rename(columns=cluster_rename)
     axs_x_sumplt = c_num // 2
     axs_y_sumplt = c_num % 2
-    axs[axs_x_sumplt, axs_y_sumplt].set(
-        xlabel=xlabel, ylabel="Kmer cluster occurence (%)", title="Summed occurrence of kmers in each cluster"
-    )
-    axs[axs_x_sumplt, axs_y_sumplt].set_xlim(-150, 100)
-    sns.lineplot(data=df_ordered, ax=axs[axs_x_sumplt, axs_y_sumplt], ci=None, **lineplot_kwrgs)
+    with sns.axes_style("white"):
+        ax = fig.add_subplot(gs[axs_x_sumplt, axs_y_sumplt])
+    ax.set(xlabel=xlabel, ylabel="K-mer cluster occurence (%)")
+    ax.set_title("Summed occurrence of K-mers in each cluster", weight='bold')
+    ax.set_xlim(-150, 100)
+    sns.lineplot(data=df_ordered, ax=ax, ci=None, palette=sm_plt_colors, **lineplot_kwrgs)
     fig.savefig(f"./results/{name}_{kmer_length}mer_{region}.pdf", format="pdf")
 
 
